@@ -78,6 +78,18 @@
         case "fmg:get-world-data":
           sendWorldData();
           break;
+        case "fmg:export-map":
+          exportMap();
+          break;
+        case "fmg:regenerate":
+          handleRegenerate();
+          break;
+        case "fmg:lock-ui":
+          lockUI();
+          break;
+        case "fmg:unlock-ui":
+          unlockUI();
+          break;
       }
     });
   }
@@ -696,6 +708,125 @@
     } catch (e) { /* ignore */ }
 
     send("fmg:world-data", result);
+  }
+
+  // ─── Export current map data ─────────────────────────────────
+  function exportMap() {
+    try {
+      if (typeof prepareMapData !== "function") {
+        parentLog("[Bridge] prepareMapData not available");
+        send("fmg:map-exported", { success: false, error: "prepareMapData not available" });
+        return;
+      }
+      var mapData = prepareMapData();
+
+      // Collect burg data (same as pollForBurgs)
+      var burgs = [];
+      if (typeof pack !== "undefined" && pack.burgs && pack.burgs.length > 1) {
+        for (var i = 1; i < pack.burgs.length; i++) {
+          var b = pack.burgs[i];
+          if (!b || !b.name || b.removed) continue;
+          var preview = getPreviewUrl(b);
+          burgs.push({
+            i: b.i,
+            name: b.name,
+            x: b.x,
+            y: b.y,
+            cell: b.cell,
+            state: b.state,
+            culture: b.culture,
+            capital: b.capital,
+            port: b.port,
+            population: b.population,
+            type: b.type,
+            group: b.group || null,
+            citadel: b.citadel || 0,
+            plaza: b.plaza || 0,
+            walls: b.walls || 0,
+            shanty: b.shanty || 0,
+            temple: b.temple || 0,
+            MFCG: b.MFCG || null,
+            previewUrl: preview,
+          });
+        }
+      }
+
+      var gw = typeof graphWidth !== "undefined" ? graphWidth : 1920;
+      var gh = typeof graphHeight !== "undefined" ? graphHeight : 1080;
+      parentLog("[Bridge] Export: " + burgs.length + " burgs, mapData length: " + (mapData ? mapData.length : 0));
+      send("fmg:map-exported", {
+        success: true,
+        mapData: mapData,
+        burgs: burgs,
+        graphWidth: gw,
+        graphHeight: gh,
+      });
+    } catch (err) {
+      console.error("[RPBuddy Bridge] Export error:", err);
+      send("fmg:map-exported", { success: false, error: err.message });
+    }
+  }
+
+  // ─── Regenerate map ─────────────────────────────────────────
+  function handleRegenerate() {
+    try {
+      if (typeof regenerateMap === "function") {
+        regenerateMap();
+        pollForBurgs();
+      } else if (typeof generate === "function") {
+        generate();
+        pollForBurgs();
+      } else {
+        parentLog("[Bridge] No regenerate function available");
+      }
+    } catch (err) {
+      console.error("[RPBuddy Bridge] Regenerate error:", err);
+    }
+  }
+
+  // ─── Lock/Unlock FMG UI ────────────────────────────────────
+  var lockStyleEl = null;
+  var lockDragInterval = null;
+
+  function lockUI() {
+    if (lockStyleEl) return;
+    var style = document.createElement("style");
+    style.id = "rpbuddy-lock-ui";
+    // Hide editing toolbar but keep #dialogs (burg info) and #tooltip (hover info)
+    style.textContent = "#optionsContainer, #optionsTrigger { display: none !important; }";
+    document.head.appendChild(style);
+    lockStyleEl = style;
+
+    // Disable burg dragging by removing d3-drag handlers once burgs are rendered
+    function disableBurgDrag() {
+      if (typeof d3 === "undefined") return false;
+      var icons = document.querySelectorAll("#burgIcons > *, #burgLabels > *");
+      if (icons.length === 0) return false;
+      d3.selectAll("#burgIcons > *").on(".drag", null);
+      d3.selectAll("#burgLabels > *").on(".drag", null);
+      parentLog("[Bridge] Burg drag disabled (" + icons.length + " elements)");
+      return true;
+    }
+    if (!disableBurgDrag()) {
+      lockDragInterval = setInterval(function () {
+        if (disableBurgDrag()) clearInterval(lockDragInterval);
+      }, 500);
+      setTimeout(function () { if (lockDragInterval) clearInterval(lockDragInterval); }, 30000);
+    }
+
+    parentLog("[Bridge] UI locked");
+  }
+
+  function unlockUI() {
+    if (lockStyleEl && lockStyleEl.parentNode) {
+      lockStyleEl.parentNode.removeChild(lockStyleEl);
+    }
+    lockStyleEl = null;
+    if (lockDragInterval) {
+      clearInterval(lockDragInterval);
+      lockDragInterval = null;
+    }
+    parentLog("[Bridge] UI unlocked");
   }
 
   // ─── Start ─────────────────────────────────────────────────
